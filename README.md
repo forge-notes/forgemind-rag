@@ -73,6 +73,17 @@ docker compose down
 
 如果在局域网访问 i5 Ubuntu 服务器，请把 `localhost` 替换为服务器 IP。
 
+当前部署地址：
+
+前端工作台：
+http://192.168.3.93:5173
+
+后端 API 文档：
+http://192.168.3.93:8000/docs
+
+Qdrant 控制台：
+http://192.168.3.93:6333/dashboard
+
 ## Docker Compose 服务
 
 - `mysql`: MySQL 8，数据持久化到 `mysql_data` volume
@@ -110,3 +121,14 @@ curl http://localhost:8000/health
 curl http://localhost:8000/api/health
 curl http://localhost:8000/api/version
 ```
+
+
+
+Day 1 已完成：
+
+- 完成 FastAPI 后端工程初始化
+- 完成 React + Vite 前端工程初始化
+- 完成 MySQL 8 容器部署
+- 完成 Qdrant 向量数据库容器部署
+- 完成 Docker Compose 一键启动
+- 完成前端调用后端健康检查
