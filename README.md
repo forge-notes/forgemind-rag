@@ -158,3 +158,4 @@ curl -X POST http://localhost:8000/api/documents/upload \
 - Username: `admin`
 - Password: `admin123`
 - Token: `day2-demo-token`
+- Day 2 已完成：实现简单登录、PDF/Markdown 上传、uploads 文件列表展示。
