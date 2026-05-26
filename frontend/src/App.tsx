@@ -10,9 +10,24 @@ type HealthResponse = {
 };
 
 type DocumentItem = {
+  id: number;
   filename: string;
+  stored_filename?: string;
   file_size: number;
+  parse_status: "uploaded" | "parsing" | "parsed" | "failed";
+  chunk_count: number;
   uploaded_at: string;
+  parsed_at?: string | null;
+};
+
+type ChunkItem = {
+  id: number;
+  document_id: number;
+  chunk_index: number;
+  content: string;
+  page_number: number | null;
+  char_count: number;
+  created_at: string;
 };
 
 type LoginState =
@@ -35,11 +50,18 @@ type UploadState =
 
 const roadmap = [
   "登录与用户管理",
-  "文档上传与解析",
-  "企业知识库",
+  "文档上传",
+  "文档解析与切分",
+  "向量化入库",
   "RAG 问答",
-  "权限与 RBAC",
 ];
+
+const parseStatusLabel: Record<DocumentItem["parse_status"], string> = {
+  uploaded: "未解析",
+  parsing: "解析中",
+  parsed: "已解析",
+  failed: "解析失败",
+};
 
 const backendBaseUrl =
   import.meta.env.VITE_BACKEND_API_URL?.replace(/\/$/, "") ??
@@ -84,6 +106,10 @@ function App() {
   const [fileInputKey, setFileInputKey] = useState(0);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [documentsMessage, setDocumentsMessage] = useState("登录后加载文档列表");
+  const [parsingDocumentId, setParsingDocumentId] = useState<number | null>(null);
+  const [chunkDocument, setChunkDocument] = useState<DocumentItem | null>(null);
+  const [chunks, setChunks] = useState<ChunkItem[]>([]);
+  const [chunksMessage, setChunksMessage] = useState("选择文档查看切分结果");
 
   const backendHealthUrl = useMemo(() => `${backendBaseUrl}/api/health`, []);
   const loginUrl = useMemo(() => `${backendBaseUrl}/api/auth/login`, []);
@@ -216,6 +242,63 @@ function App() {
     }
   }
 
+  async function parseDocument(document: DocumentItem) {
+    setParsingDocumentId(document.id);
+    setDocumentsMessage(`正在解析 ${document.filename}...`);
+
+    try {
+      const response = await fetch(`${documentsUrl}/${document.id}/parse`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const parsedDocument = (await response.json()) as DocumentItem;
+      setDocuments((current) =>
+        current.map((item) => (item.id === parsedDocument.id ? parsedDocument : item)),
+      );
+      setDocumentsMessage(
+        `${parsedDocument.filename} 解析完成，共 ${parsedDocument.chunk_count} 个 chunk`,
+      );
+      await showChunks(parsedDocument);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setDocumentsMessage(`解析失败：${detail}`);
+      await loadDocuments();
+    } finally {
+      setParsingDocumentId(null);
+    }
+  }
+
+  async function showChunks(document: DocumentItem) {
+    setChunkDocument(document);
+    setChunks([]);
+    setChunksMessage(`正在加载 ${document.filename} 的切分结果...`);
+
+    try {
+      const response = await fetch(`${documentsUrl}/${document.id}/chunks`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        document: DocumentItem;
+        chunks: ChunkItem[];
+      };
+      setChunkDocument(data.document);
+      setChunks(data.chunks);
+      setChunksMessage(
+        data.chunks.length > 0 ? "切分结果已加载" : "暂无 chunk，请先解析文档",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setChunksMessage(`切分结果加载失败：${detail}`);
+    }
+  }
+
   if (!token) {
     return (
       <main className="app-shell login-shell">
@@ -223,7 +306,7 @@ function App() {
           <div>
             <p className="eyebrow">Enterprise Knowledge Agent</p>
             <h1>登录工作台</h1>
-            <p className="muted">Day 2 简单登录与文档上传。</p>
+            <p className="muted">Day 3 文档解析与切分。</p>
           </div>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -270,15 +353,16 @@ function App() {
           <p className="eyebrow">Enterprise Knowledge Agent</p>
           <h1>企业知识代理工作台</h1>
         </div>
-        <div className="stage-pill">Day 2</div>
+        <div className="stage-pill">Day 3</div>
       </section>
 
       <section className="status-grid">
         <div className="panel stage-panel">
           <p className="label">当前阶段</p>
-          <h2>简单登录与文档上传</h2>
+          <h2>文档解析与文本切分</h2>
           <p className="muted">
-            当前版本提供演示登录、PDF/Markdown 上传和 uploads 目录文件列表。
+            当前版本将上传文件写入 MySQL，支持 PDF/Markdown 解析，并把文本保存为
+            800-1000 字符左右的 chunk。
           </p>
         </div>
 
@@ -352,7 +436,7 @@ function App() {
           <div className="documents-header">
             <div>
               <p className="label">已上传文档</p>
-              <h2>uploads 目录</h2>
+              <h2>解析队列</h2>
             </div>
             <button
               className="secondary-action"
@@ -367,16 +451,66 @@ function App() {
 
           <div className="document-list">
             {documents.map((document) => (
-              <article className="document-item" key={document.filename}>
-                <div>
-                  <h3>{document.filename}</h3>
-                  <p>{formatUploadTime(document.uploaded_at)}</p>
+              <article className="document-item" key={document.id}>
+                <div className="document-main">
+                  <div>
+                    <h3>{document.filename}</h3>
+                    <p>
+                      {formatFileSize(document.file_size)} ·{" "}
+                      {formatUploadTime(document.uploaded_at)}
+                    </p>
+                  </div>
+                  <div className="document-meta">
+                    <span className={`status-badge ${document.parse_status}`}>
+                      {parseStatusLabel[document.parse_status]}
+                    </span>
+                    <span>{document.chunk_count} chunks</span>
+                  </div>
                 </div>
-                <span>{formatFileSize(document.file_size)}</span>
+                <div className="document-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={parsingDocumentId === document.id}
+                    type="button"
+                    onClick={() => void parseDocument(document)}
+                  >
+                    {parsingDocumentId === document.id ? "解析中..." : "解析文档"}
+                  </button>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => void showChunks(document)}
+                  >
+                    查看切分结果
+                  </button>
+                </div>
               </article>
             ))}
           </div>
         </section>
+      </section>
+
+      <section className="panel chunks-panel">
+        <div>
+          <p className="label">切分结果</p>
+          <h2>{chunkDocument ? chunkDocument.filename : "等待选择文档"}</h2>
+          <p className="documents-message">{chunksMessage}</p>
+        </div>
+
+        <div className="chunk-list">
+          {chunks.slice(0, 5).map((chunk) => (
+            <article className="chunk-item" key={chunk.id}>
+              <div className="chunk-header">
+                <span>Chunk {chunk.chunk_index + 1}</span>
+                <span>
+                  {chunk.page_number ? `第 ${chunk.page_number} 页 · ` : ""}
+                  {chunk.char_count} 字符
+                </span>
+              </div>
+              <p>{chunk.content}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="roadmap-section">

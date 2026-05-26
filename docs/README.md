@@ -1,6 +1,6 @@
-# Day 2 Notes
+# Day 3 Notes
 
-Day 2 adds the smallest usable login and document upload flow on top of the Docker Compose runtime base.
+Day 3 adds document parsing and text chunking on top of the existing login and upload flow.
 
 Included services:
 
@@ -9,14 +9,21 @@ Included services:
 - MySQL 8
 - Qdrant
 
-Included Day 2 features:
+Included Day 3 features:
 
+- MySQL tables: `documents` and `document_chunks`
 - Demo login with `admin` / `admin123`
 - PDF and Markdown upload to `/app/uploads`
-- Document listing from the mounted `uploads/` directory
+- PDF parsing with PyMuPDF
+- Markdown parsing by reading text content
+- Simple 900-character chunking with 120-character overlap
+- Frontend parse action and chunk preview
 
 Not included yet:
 
+- Vectorization
+- Qdrant document writes
+- DeepSeek or any LLM
 - RAG
 - RBAC
 - MinIO

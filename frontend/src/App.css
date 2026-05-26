@@ -254,6 +254,11 @@ h3 {
   color: #0f5f59;
 }
 
+.secondary-action:disabled {
+  cursor: progress;
+  opacity: 0.64;
+}
+
 .form-message {
   min-height: 24px;
   margin: 0;
@@ -372,18 +377,20 @@ h3 {
 }
 
 .document-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  min-height: 76px;
+  display: grid;
+  gap: 14px;
+  min-height: 112px;
   padding: 14px;
   border: 1px solid #e0e5e8;
   border-radius: 8px;
   background: #f9fafb;
 }
 
-.document-item div {
+.document-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
   min-width: 0;
 }
 
@@ -398,11 +405,96 @@ h3 {
   font-weight: 700;
 }
 
-.document-item span {
+.document-meta {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.document-meta span {
   flex: 0 0 auto;
   color: #0f5f59;
   font-size: 0.86rem;
   font-weight: 900;
+}
+
+.status-badge {
+  min-width: 72px;
+  border: 1px solid #cbd4d9;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 4px 9px;
+  text-align: center;
+}
+
+.status-badge.uploaded {
+  color: #33424b;
+  background: #eef2f4;
+}
+
+.status-badge.parsing {
+  color: #7c2d12;
+  background: #ffedd5;
+}
+
+.status-badge.parsed {
+  color: #0f5f59;
+  background: #e7f7f4;
+}
+
+.status-badge.failed {
+  color: #c2410c;
+  background: #fff1eb;
+}
+
+.document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chunks-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+  padding: 24px;
+}
+
+.chunk-list {
+  display: grid;
+  gap: 12px;
+}
+
+.chunk-item {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e0e5e8;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.chunk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #63717a;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.chunk-item p {
+  display: -webkit-box;
+  margin: 0;
+  color: #172026;
+  font-size: 0.94rem;
+  line-height: 1.65;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
 }
 
 .section-heading {
@@ -476,11 +568,13 @@ h3 {
   .connection-panel,
   .upload-panel,
   .documents-panel,
+  .chunks-panel,
   .login-panel {
     padding: 20px;
   }
 
-  .document-item {
+  .document-main,
+  .chunk-header {
     align-items: flex-start;
     flex-direction: column;
   }
