@@ -31,7 +31,7 @@ docker compose up -d --build
 APP_STAGE=Day 4
 ```
 
-Day 4 默认使用 `EMBEDDING_PROVIDER=local_hash`，这是一个无需外部 API 的演示 embedding provider。后续可替换为 `openai_compatible` 并配置真实 embedding API。
+Day 4 默认使用本地 Ollama 的 `bge-m3:latest` 做真实 embedding。`qwen`、`deepseek` 等生成模型暂不用于 Day 4，后续 RAG 回答阶段再接入。
 
 ## 常用访问地址
 
@@ -105,6 +105,18 @@ http://192.168.3.93:6333/dashboard
 
 ## Embedding 配置
 
+默认使用本地 Ollama：
+
+```env
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=bge-m3:latest
+EMBEDDING_API_BASE=http://192.168.9.39:11434
+EMBEDDING_API_KEY=
+EMBEDDING_DIM=1024
+```
+
+仍可改为无需外部服务的演示 provider：
+
 ```env
 EMBEDDING_PROVIDER=local_hash
 EMBEDDING_MODEL=local-hash-demo
@@ -113,7 +125,7 @@ EMBEDDING_API_KEY=
 EMBEDDING_DIM=384
 ```
 
-如果改为外部 OpenAI-compatible embedding 服务：
+也可改为外部 OpenAI-compatible embedding 服务：
 
 ```env
 EMBEDDING_PROVIDER=openai_compatible
@@ -123,7 +135,7 @@ EMBEDDING_API_KEY=your-api-key
 EMBEDDING_DIM=1024
 ```
 
-如果 embedding 配置缺失或维度与 Qdrant collection 不一致，后端会返回清晰错误。
+如果 embedding 配置缺失或维度与 Qdrant collection 不一致，后端会返回清晰错误。若之前已经用 `local_hash` 创建过 384 维 `knowledge_chunks` collection，切换到 `bge-m3` 的 1024 维前需要清空或删除旧 collection 后重新向量化。
 
 ## 验证命令
 

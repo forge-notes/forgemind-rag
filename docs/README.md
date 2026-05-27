@@ -14,7 +14,7 @@ Included Day 4 features:
 - MySQL embedding fields on `documents` and `document_chunks`
 - Qdrant collection: `knowledge_chunks`
 - Pluggable embedding service configured by `EMBEDDING_*`
-- Demo `local_hash` embedding provider
+- Ollama `bge-m3:latest` embedding provider
 - `POST /api/documents/{document_id}/embed`
 - `POST /api/search`
 - Frontend vectorization button and search result preview
@@ -23,6 +23,7 @@ Not included yet:
 
 - RAG answer generation
 - DeepSeek or any answer-generating LLM
+- Qwen answer generation
 - Chat UI
 - RBAC
 - MinIO

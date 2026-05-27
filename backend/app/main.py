@@ -129,6 +129,20 @@ class EmbeddingService:
             raise EmbeddingConfigError("EMBEDDING_DIM is required.")
         if self.provider in {"local_hash", "hash"}:
             return
+        if self.provider == "ollama":
+            missing = [
+                name
+                for name, value in {
+                    "EMBEDDING_MODEL": self.model,
+                    "EMBEDDING_API_BASE": self.api_base,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise EmbeddingConfigError(
+                    f"Missing embedding configuration: {', '.join(missing)}."
+                )
+            return
         if self.provider in {"openai", "openai_compatible"}:
             missing = [
                 name
@@ -145,13 +159,15 @@ class EmbeddingService:
                 )
             return
         raise EmbeddingConfigError(
-            "Unsupported EMBEDDING_PROVIDER. Use local_hash or openai_compatible."
+            "Unsupported EMBEDDING_PROVIDER. Use local_hash, ollama, or openai_compatible."
         )
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         self.validate()
         if self.provider in {"local_hash", "hash"}:
             return [self._local_hash_embedding(text_value) for text_value in texts]
+        if self.provider == "ollama":
+            return self._ollama_embeddings(texts)
         return self._openai_compatible_embeddings(texts)
 
     def embed_text(self, text_value: str) -> list[float]:
@@ -173,6 +189,24 @@ class EmbeddingService:
         if norm == 0:
             return vector
         return [value / norm for value in vector]
+
+    def _ollama_embeddings(self, texts: list[str]) -> list[list[float]]:
+        response = httpx.post(
+            f"{self.api_base}/api/embed",
+            json={"model": self.model, "input": texts},
+            timeout=120,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        embeddings = payload.get("embeddings", [])
+        if len(embeddings) != len(texts):
+            raise RuntimeError("Ollama returned an unexpected number of vectors.")
+        for embedding in embeddings:
+            if len(embedding) != self.dim:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch: expected {self.dim}, got {len(embedding)}."
+                )
+        return embeddings
 
     def _openai_compatible_embeddings(self, texts: list[str]) -> list[list[float]]:
         response = httpx.post(
