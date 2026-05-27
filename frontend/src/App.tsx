@@ -57,6 +57,16 @@ type RagSource = {
   content: string;
 };
 
+type QARecord = {
+  id: number;
+  question: string;
+  answer: string;
+  sources: RagSource[];
+  model_name: string;
+  top_k: number;
+  created_at: string;
+};
+
 type LoginState =
   | { status: "idle"; message: string }
   | { status: "checking"; message: string }
@@ -93,6 +103,15 @@ const roadmap = [
   "文档解析与切分",
   "向量化检索",
   "RAG 问答",
+  "问答历史",
+];
+
+const exampleQuestions = [
+  "这个人有哪些技术负责人经验？",
+  "他熟悉哪些技术栈？",
+  "他有没有 Docker 和 CI/CD 经验？",
+  "他有没有企业系统重构经验？",
+  "他适合什么类型的软件开发岗位？",
 ];
 
 const parseStatusLabel: Record<ParseStatus, string> = {
@@ -130,6 +149,15 @@ function formatUploadTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function previewContent(content: string, limit = 260) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, limit)}...`;
 }
 
 async function ensureOk(response: Response) {
@@ -191,6 +219,9 @@ function App() {
   });
   const [ragAnswer, setRagAnswer] = useState("");
   const [ragSources, setRagSources] = useState<RagSource[]>([]);
+  const [qaHistory, setQaHistory] = useState<QARecord[]>([]);
+  const [historyMessage, setHistoryMessage] = useState("登录后加载问答历史");
+  const [activeRecordId, setActiveRecordId] = useState<number | null>(null);
 
   const backendHealthUrl = useMemo(() => `${backendBaseUrl}/api/health`, []);
   const loginUrl = useMemo(() => `${backendBaseUrl}/api/auth/login`, []);
@@ -201,6 +232,7 @@ function App() {
   );
   const searchUrl = useMemo(() => `${backendBaseUrl}/api/search`, []);
   const askUrl = useMemo(() => `${backendBaseUrl}/api/ask`, []);
+  const historyUrl = useMemo(() => `${backendBaseUrl}/api/qa/history`, []);
 
   async function loadDocuments() {
     setDocumentsMessage("正在加载文档列表...");
@@ -220,9 +252,28 @@ function App() {
     }
   }
 
+  async function loadQaHistory() {
+    setHistoryMessage("正在加载问答历史...");
+
+    try {
+      const response = await fetch(historyUrl);
+      await ensureOk(response);
+
+      const data = (await response.json()) as { records: QARecord[] };
+      setQaHistory(data.records);
+      setHistoryMessage(
+        data.records.length > 0 ? "最近 20 条问答已加载" : "暂无问答历史",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setHistoryMessage(`问答历史加载失败：${detail}`);
+    }
+  }
+
   useEffect(() => {
     if (token) {
       void loadDocuments();
+      void loadQaHistory();
     }
   }, [token]);
 
@@ -439,17 +490,32 @@ function App() {
       const data = (await response.json()) as {
         answer: string;
         sources: RagSource[];
+        record_id: number | null;
       };
       setRagAnswer(data.answer);
       setRagSources(data.sources);
+      setActiveRecordId(data.record_id);
       setAskState({
         status: "success",
         message: data.sources.length > 0 ? "回答已生成" : "回答已生成，但没有来源片段",
       });
+      await loadQaHistory();
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown error";
       setAskState({ status: "error", message: `问答失败：${detail}` });
     }
+  }
+
+  function showHistoryRecord(record: QARecord) {
+    setRagQuestion(record.question);
+    setRagTopK(record.top_k);
+    setRagAnswer(record.answer);
+    setRagSources(record.sources);
+    setActiveRecordId(record.id);
+    setAskState({
+      status: "success",
+      message: "已载入历史问答",
+    });
   }
 
   if (!token) {
@@ -459,7 +525,7 @@ function App() {
           <div>
             <p className="eyebrow">Enterprise Knowledge Agent</p>
             <h1>登录工作台</h1>
-            <p className="muted">Day 5 RAG 问答。</p>
+            <p className="muted">Day 6 问答历史与体验优化。</p>
           </div>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -506,15 +572,15 @@ function App() {
           <p className="eyebrow">Enterprise Knowledge Agent</p>
           <h1>企业知识代理工作台</h1>
         </div>
-        <div className="stage-pill">Day 5</div>
+        <div className="stage-pill">Day 6</div>
       </section>
 
       <section className="status-grid">
         <div className="panel stage-panel">
           <p className="label">当前阶段</p>
-          <h2>RAG 问答</h2>
+          <h2>问答历史与体验优化</h2>
           <p className="muted">
-            当前版本会先检索 Qdrant 中的相关 chunks，再调用 Ollama 聊天模型基于参考资料生成回答。
+            当前版本会保存单次问答记录，刷新页面后仍可查看最近 20 条回答和来源引用。
           </p>
         </div>
 
@@ -659,66 +725,118 @@ function App() {
         </section>
       </section>
 
-      <section className="panel ask-panel">
-        <div>
-          <p className="label">知识库问答</p>
-          <h2>基于来源片段生成回答</h2>
-          <p className={`documents-message ${askState.status}`}>
-            {askState.message}
-          </p>
-        </div>
+      <section className="qa-grid">
+        <section className="panel ask-panel">
+          <div>
+            <p className="label">知识库问答</p>
+            <h2>基于来源片段生成回答</h2>
+            <p className={`documents-message ${askState.status}`}>
+              {askState.message}
+            </p>
+          </div>
 
-        <form className="ask-form" onSubmit={handleAsk}>
-          <label>
-            问题
-            <textarea
-              value={ragQuestion}
-              onChange={(event) => setRagQuestion(event.target.value)}
-              placeholder="输入一个希望基于知识库回答的问题"
-            />
-          </label>
-          <label>
-            Top K
-            <input
-              min={1}
-              max={20}
-              type="number"
-              value={ragTopK}
-              onChange={(event) => setRagTopK(Number(event.target.value))}
-            />
-          </label>
-          <button
-            className="primary-action"
-            disabled={askState.status === "asking"}
-            type="submit"
-          >
-            {askState.status === "asking" ? "生成中..." : "发送"}
-          </button>
-        </form>
+          <div className="example-question-row" aria-label="示例问题">
+            {exampleQuestions.map((question) => (
+              <button
+                className="example-question"
+                key={question}
+                type="button"
+                onClick={() => setRagQuestion(question)}
+              >
+                {question}
+              </button>
+            ))}
+          </div>
 
-        {ragAnswer ? (
-          <article className="answer-box">
-            <p>{ragAnswer}</p>
-          </article>
-        ) : null}
-
-        <div className="source-list">
-          {ragSources.map((source, index) => (
-            <article
-              className="source-item"
-              key={`${source.document_id}-${source.chunk_index}-${index}`}
+          <form className="ask-form" onSubmit={handleAsk}>
+            <label className="question-field">
+              问题
+              <textarea
+                value={ragQuestion}
+                onChange={(event) => setRagQuestion(event.target.value)}
+                placeholder="输入一个希望基于知识库回答的问题"
+              />
+            </label>
+            <label>
+              Top K
+              <input
+                min={1}
+                max={20}
+                type="number"
+                value={ragTopK}
+                onChange={(event) => setRagTopK(Number(event.target.value))}
+              />
+            </label>
+            <button
+              className="primary-action"
+              disabled={askState.status === "asking"}
+              type="submit"
             >
-              <div className="chunk-header">
-                <span>{source.filename}</span>
-                <span>
-                  {source.page_number ? `第 ${source.page_number} 页 · ` : ""}
-                  Chunk {source.chunk_index + 1} · score {source.score.toFixed(4)}
-                </span>
+              {askState.status === "asking" ? "生成中..." : "发送"}
+            </button>
+          </form>
+
+          {ragAnswer ? (
+            <article className="answer-box">
+              <div className="answer-title">
+                <span>回答</span>
+                {activeRecordId ? <span>记录 #{activeRecordId}</span> : null}
               </div>
-              <p>{source.content}</p>
+              <p>{ragAnswer}</p>
             </article>
-          ))}
-        </div>
+          ) : null}
+
+          <div className="source-list">
+            {ragSources.map((source, index) => (
+              <article
+                className="source-item"
+                key={`${source.document_id}-${source.chunk_index}-${index}`}
+              >
+                <div className="source-card-meta">
+                  <span>{source.filename}</span>
+                  <span>{source.page_number ? `第 ${source.page_number} 页` : "页码未知"}</span>
+                  <span>Chunk {source.chunk_index + 1}</span>
+                  <span>score {source.score.toFixed(4)}</span>
+                </div>
+                <p>{previewContent(source.content)}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel history-panel">
+          <div className="documents-header">
+            <div>
+              <p className="label">问答历史</p>
+              <h2>最近 20 条</h2>
+            </div>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void loadQaHistory()}
+            >
+              刷新
+            </button>
+          </div>
+
+          <p className="documents-message">{historyMessage}</p>
+
+          <div className="history-list">
+            {qaHistory.map((record) => (
+              <button
+                className={`history-item ${record.id === activeRecordId ? "active" : ""}`}
+                key={record.id}
+                type="button"
+                onClick={() => showHistoryRecord(record)}
+              >
+                <span>{record.question}</span>
+                <small>
+                  {formatUploadTime(record.created_at)} · {record.model_name} · top {record.top_k}
+                </small>
+              </button>
+            ))}
+          </div>
+        </section>
       </section>
 
       <section className="panel search-panel">

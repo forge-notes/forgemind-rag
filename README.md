@@ -2,7 +2,7 @@
 
 企业知识代理项目，用于构建企业知识库、文档解析、向量检索、RAG 问答和权限控制能力。
 
-当前仓库已完成 Day 5：RAG 问答。
+当前仓库已完成 Day 6：问答历史与体验优化。
 
 ## 技术栈
 
@@ -26,10 +26,10 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-如果已经有旧 `.env`，请补齐 Day 5 配置，并确认：
+如果已经有旧 `.env`，请补齐 Day 6 配置，并确认：
 
 ```env
-APP_STAGE=Day 5
+APP_STAGE=Day 6
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=bge-m3:latest
 EMBEDDING_API_BASE=http://192.168.9.39:11434
@@ -49,6 +49,7 @@ LLM_API_BASE=http://192.168.9.39:11434
 - Documents API: http://localhost:8000/api/documents
 - Search API: http://localhost:8000/api/search
 - Ask API: http://localhost:8000/api/ask
+- QA History API: http://localhost:8000/api/qa/history
 - Qdrant dashboard: http://localhost:6333/dashboard
 
 如果在局域网访问 i5 Ubuntu 服务器，请把 `localhost` 替换为服务器 IP。
@@ -62,12 +63,11 @@ LLM_API_BASE=http://192.168.9.39:11434
 - Day 3 PDF / Markdown 解析和文本切分
 - Day 4 chunk embedding、Qdrant 入库、基础相似检索
 - Day 5 基于检索 chunks 的 RAG 问答
-- Day 5 前端知识库问答区域和来源引用展示
+- Day 6 问答记录保存、最近 20 条历史展示、示例问题和来源引用卡片优化
 
 暂未实现：
 
 - 多轮聊天
-- 问答历史保存
 - 流式输出
 - RBAC
 - MinIO
@@ -75,7 +75,7 @@ LLM_API_BASE=http://192.168.9.39:11434
 - Celery
 - Nginx
 
-## Day 5 接口
+## Day 6 接口
 
 - `POST /api/auth/login`
 - `POST /api/documents/upload`
@@ -85,6 +85,7 @@ LLM_API_BASE=http://192.168.9.39:11434
 - `POST /api/documents/{document_id}/embed`
 - `POST /api/search`
 - `POST /api/ask`
+- `GET /api/qa/history`
 
 `POST /api/ask` 请求：
 
@@ -99,6 +100,9 @@ LLM_API_BASE=http://192.168.9.39:11434
 
 - `answer`: Ollama 聊天模型基于参考资料生成的回答
 - `sources`: Qdrant 检索到的来源 chunks
+- `record_id`: 保存到 `qa_records` 后生成的问答记录 ID；如果历史保存失败则为 `null`
+
+`GET /api/qa/history` 返回最近 20 条问答记录，按 `created_at` 倒序排列，并把 `sources_json` 反序列化为 `sources`。
 
 Prompt 约束：
 
@@ -116,6 +120,7 @@ curl -X POST http://localhost:8000/api/documents/1/embed
 curl -X POST http://localhost:8000/api/ask \
   -H "Content-Type: application/json" \
   -d '{"question":"你的问题","top_k":5}'
+curl http://localhost:8000/api/qa/history
 ```
 
 ## 演示账号

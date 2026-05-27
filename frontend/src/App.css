@@ -484,6 +484,10 @@ h3 {
   color: #7c2d12;
 }
 
+.documents-message.success {
+  color: #0f766e;
+}
+
 .document-actions {
   display: flex;
   flex-wrap: wrap;
@@ -504,10 +508,18 @@ h3 {
   padding: 24px;
 }
 
-.ask-panel {
+.qa-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
   gap: 18px;
   margin-top: 24px;
+}
+
+.ask-panel,
+.history-panel {
+  display: grid;
+  align-content: start;
+  gap: 18px;
   padding: 24px;
 }
 
@@ -534,11 +546,52 @@ h3 {
   font-weight: 800;
 }
 
+.question-field textarea {
+  min-height: 142px;
+  border-color: #9bb8b5;
+  background: #fbfefd;
+  font-size: 1rem;
+}
+
+.example-question-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.example-question {
+  min-height: 34px;
+  border: 1px solid #cbd4d9;
+  border-radius: 999px;
+  color: #33424b;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 800;
+  padding: 7px 12px;
+}
+
+.example-question:hover {
+  border-color: #0f766e;
+  color: #0f5f59;
+  background: #e7f7f4;
+}
+
 .answer-box {
   padding: 18px;
   border: 1px solid #cbd4d9;
   border-radius: 8px;
   background: #f9fafb;
+}
+
+.answer-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #63717a;
+  font-size: 0.82rem;
+  font-weight: 900;
 }
 
 .answer-box p {
@@ -563,15 +616,64 @@ h3 {
   background: #ffffff;
 }
 
+.source-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-card-meta span {
+  min-height: 28px;
+  border: 1px solid #e0e5e8;
+  border-radius: 999px;
+  color: #33424b;
+  background: #f9fafb;
+  font-size: 0.8rem;
+  font-weight: 900;
+  padding: 5px 9px;
+}
+
 .source-item p {
-  display: -webkit-box;
   margin: 0;
   color: #172026;
   font-size: 0.94rem;
   line-height: 1.65;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-item {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid #e0e5e8;
+  border-radius: 8px;
+  color: #172026;
+  background: #f9fafb;
+  cursor: pointer;
+  padding: 14px;
+  text-align: left;
+}
+
+.history-item:hover,
+.history-item.active {
+  border-color: #0f766e;
+  background: #e7f7f4;
+}
+
+.history-item span {
+  font-size: 0.94rem;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.history-item small {
+  color: #63717a;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .search-results {
@@ -652,7 +754,7 @@ h3 {
 
 .roadmap-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px;
 }
 
@@ -681,6 +783,7 @@ h3 {
   .status-grid,
   .roadmap-grid,
   .document-grid,
+  .qa-grid,
   .login-panel,
   .ask-form,
   .search-form {
@@ -712,6 +815,7 @@ h3 {
   .upload-panel,
   .documents-panel,
   .ask-panel,
+  .history-panel,
   .search-panel,
   .chunks-panel,
   .login-panel {

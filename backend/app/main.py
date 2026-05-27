@@ -1,4 +1,6 @@
 import hashlib
+import json
+import logging
 import math
 import os
 import re
@@ -31,7 +33,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 APP_NAME = "Enterprise Knowledge Agent"
 APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
-APP_STAGE = os.getenv("APP_STAGE", "Day 5")
+APP_STAGE = os.getenv("APP_STAGE", "Day 6")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "mysql+pymysql://eka_user:eka_password@mysql:3306/enterprise_knowledge_agent",
@@ -46,6 +48,8 @@ DEMO_TOKEN = "day2-demo-token"
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".md", ".markdown"}
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -86,6 +90,18 @@ class DocumentChunk(Base):
     embedding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class QARecord(Base):
+    __tablename__ = "qa_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class LoginRequest(BaseModel):
@@ -377,6 +393,23 @@ def _chunk_response(chunk: DocumentChunk) -> dict[str, object]:
     }
 
 
+def _qa_record_response(record: QARecord) -> dict[str, object]:
+    try:
+        sources = json.loads(record.sources_json)
+    except (TypeError, json.JSONDecodeError):
+        sources = []
+
+    return {
+        "id": record.id,
+        "question": record.question,
+        "answer": record.answer,
+        "sources": sources,
+        "model_name": record.model_name,
+        "top_k": record.top_k,
+        "created_at": record.created_at.isoformat(),
+    }
+
+
 def _normalize_text(text: str) -> str:
     lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")]
     return "\n".join(line for line in lines if line).strip()
@@ -602,11 +635,17 @@ class RagService:
         if not cleaned_question:
             raise HTTPException(status_code=400, detail="question is required.")
 
-        sources = _search_knowledge_chunks(cleaned_question, top_k, include_chunk_id=False)
+        safe_top_k = max(1, min(top_k, 20))
+        sources = _search_knowledge_chunks(cleaned_question, safe_top_k, include_chunk_id=False)
         context = _build_rag_context(sources)
         prompt = _build_rag_prompt(cleaned_question, context)
         answer = self.llm_service.generate(prompt)
-        return {"answer": answer, "sources": sources}
+        return {
+            "answer": answer,
+            "sources": sources,
+            "model_name": self.llm_service.model,
+            "top_k": safe_top_k,
+        }
 
 
 def _sync_existing_uploads() -> None:
@@ -653,7 +692,7 @@ def get_db() -> Iterator[Session]:
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
-    description="Day 5 FastAPI service for RAG question answering.",
+    description="Day 6 FastAPI service for RAG question answering with history.",
 )
 
 app.add_middleware(
@@ -933,12 +972,45 @@ def search_chunks(payload: SearchRequest) -> dict[str, object]:
 
 
 @app.post("/api/ask")
-def ask_question(payload: AskRequest) -> dict[str, object]:
+def ask_question(
+    payload: AskRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
     try:
-        return RagService().ask(payload.question, payload.top_k)
+        result = RagService().ask(payload.question, payload.top_k)
     except LLMConfigError as exc:
         raise _llm_error_response(exc) from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"RAG answer failed: {exc}") from exc
+
+    record_id: int | None = None
+    try:
+        record = QARecord(
+            question=payload.question.strip(),
+            answer=str(result["answer"]),
+            sources_json=json.dumps(result["sources"], ensure_ascii=False),
+            model_name=str(result["model_name"]),
+            top_k=int(result["top_k"]),
+            created_at=_utc_now(),
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        record_id = record.id
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to save QA record.")
+
+    return {
+        "answer": result["answer"],
+        "sources": result["sources"],
+        "record_id": record_id,
+    }
+
+
+@app.get("/api/qa/history")
+def list_qa_history(db: Session = Depends(get_db)) -> dict[str, list[dict[str, object]]]:
+    records = db.query(QARecord).order_by(QARecord.created_at.desc()).limit(20).all()
+    return {"records": [_qa_record_response(record) for record in records]}
