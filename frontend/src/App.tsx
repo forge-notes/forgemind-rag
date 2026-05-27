@@ -9,15 +9,20 @@ type HealthResponse = {
   checked_at?: string;
 };
 
+type ParseStatus = "uploaded" | "parsing" | "parsed" | "failed";
+type EmbeddingStatus = "pending" | "embedding" | "embedded" | "failed";
+
 type DocumentItem = {
   id: number;
   filename: string;
   stored_filename?: string;
   file_size: number;
-  parse_status: "uploaded" | "parsing" | "parsed" | "failed";
+  parse_status: ParseStatus;
   chunk_count: number;
+  embedding_status?: EmbeddingStatus;
   uploaded_at: string;
   parsed_at?: string | null;
+  embedded_at?: string | null;
 };
 
 type ChunkItem = {
@@ -27,7 +32,20 @@ type ChunkItem = {
   content: string;
   page_number: number | null;
   char_count: number;
+  vector_id?: string | null;
+  embedding_status?: EmbeddingStatus;
   created_at: string;
+  embedded_at?: string | null;
+};
+
+type SearchResult = {
+  document_id: number;
+  filename: string;
+  chunk_id: number;
+  chunk_index: number;
+  page_number: number | null;
+  score: number;
+  content: string;
 };
 
 type LoginState =
@@ -48,19 +66,32 @@ type UploadState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type SearchState =
+  | { status: "idle"; message: string }
+  | { status: "searching"; message: string }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
 const roadmap = [
   "登录与用户管理",
   "文档上传",
   "文档解析与切分",
-  "向量化入库",
+  "向量化检索",
   "RAG 问答",
 ];
 
-const parseStatusLabel: Record<DocumentItem["parse_status"], string> = {
+const parseStatusLabel: Record<ParseStatus, string> = {
   uploaded: "未解析",
   parsing: "解析中",
   parsed: "已解析",
   failed: "解析失败",
+};
+
+const embeddingStatusLabel: Record<EmbeddingStatus, string> = {
+  pending: "未向量化",
+  embedding: "向量化中",
+  embedded: "已向量化",
+  failed: "向量化失败",
 };
 
 const backendBaseUrl =
@@ -86,6 +117,25 @@ function formatUploadTime(value: string) {
   }).format(new Date(value));
 }
 
+async function ensureOk(response: Response) {
+  if (response.ok) {
+    return;
+  }
+
+  try {
+    const data = (await response.json()) as { detail?: unknown };
+    if (typeof data.detail === "string") {
+      throw new Error(data.detail);
+    }
+  } catch (error) {
+    if (error instanceof Error && !error.message.startsWith("Unexpected")) {
+      throw error;
+    }
+  }
+
+  throw new Error(`HTTP ${response.status}`);
+}
+
 function App() {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
@@ -107,9 +157,17 @@ function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [documentsMessage, setDocumentsMessage] = useState("登录后加载文档列表");
   const [parsingDocumentId, setParsingDocumentId] = useState<number | null>(null);
+  const [embeddingDocumentId, setEmbeddingDocumentId] = useState<number | null>(null);
   const [chunkDocument, setChunkDocument] = useState<DocumentItem | null>(null);
   const [chunks, setChunks] = useState<ChunkItem[]>([]);
   const [chunksMessage, setChunksMessage] = useState("选择文档查看切分结果");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [topK, setTopK] = useState(5);
+  const [searchState, setSearchState] = useState<SearchState>({
+    status: "idle",
+    message: "输入问题后检索 Qdrant 中的相关片段",
+  });
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
 
   const backendHealthUrl = useMemo(() => `${backendBaseUrl}/api/health`, []);
   const loginUrl = useMemo(() => `${backendBaseUrl}/api/auth/login`, []);
@@ -118,16 +176,14 @@ function App() {
     () => `${backendBaseUrl}/api/documents/upload`,
     [],
   );
+  const searchUrl = useMemo(() => `${backendBaseUrl}/api/search`, []);
 
   async function loadDocuments() {
     setDocumentsMessage("正在加载文档列表...");
 
     try {
       const response = await fetch(documentsUrl);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const data = (await response.json()) as { documents: DocumentItem[] };
       setDocuments(data.documents);
@@ -158,10 +214,7 @@ function App() {
         },
         body: JSON.stringify({ username, password }),
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const data = (await response.json()) as { token: string };
       setToken(data.token);
@@ -180,10 +233,7 @@ function App() {
 
     try {
       const response = await fetch(backendHealthUrl);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const data = (await response.json()) as HealthResponse;
       setCheckState({
@@ -220,10 +270,7 @@ function App() {
         },
         body: formData,
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const data = (await response.json()) as DocumentItem;
       setUploadState({
@@ -250,10 +297,7 @@ function App() {
       const response = await fetch(`${documentsUrl}/${document.id}/parse`, {
         method: "POST",
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const parsedDocument = (await response.json()) as DocumentItem;
       setDocuments((current) =>
@@ -272,6 +316,30 @@ function App() {
     }
   }
 
+  async function embedDocument(document: DocumentItem) {
+    setEmbeddingDocumentId(document.id);
+    setDocumentsMessage(`正在向量化 ${document.filename}...`);
+
+    try {
+      const response = await fetch(`${documentsUrl}/${document.id}/embed`, {
+        method: "POST",
+      });
+      await ensureOk(response);
+
+      const embeddedDocument = (await response.json()) as DocumentItem;
+      setDocuments((current) =>
+        current.map((item) => (item.id === embeddedDocument.id ? embeddedDocument : item)),
+      );
+      setDocumentsMessage(`${embeddedDocument.filename} 向量化完成`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setDocumentsMessage(`向量化失败：${detail}`);
+      await loadDocuments();
+    } finally {
+      setEmbeddingDocumentId(null);
+    }
+  }
+
   async function showChunks(document: DocumentItem) {
     setChunkDocument(document);
     setChunks([]);
@@ -279,10 +347,7 @@ function App() {
 
     try {
       const response = await fetch(`${documentsUrl}/${document.id}/chunks`);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      await ensureOk(response);
 
       const data = (await response.json()) as {
         document: DocumentItem;
@@ -299,6 +364,38 @@ function App() {
     }
   }
 
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearchState({ status: "searching", message: "正在检索知识库..." });
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(searchUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query: searchQuery, top_k: topK }),
+      });
+      await ensureOk(response);
+
+      const data = (await response.json()) as {
+        results: SearchResult[];
+      };
+      setSearchResults(data.results);
+      setSearchState({
+        status: "success",
+        message:
+          data.results.length > 0
+            ? `找到 ${data.results.length} 个相关片段`
+            : "没有找到相关片段",
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setSearchState({ status: "error", message: `检索失败：${detail}` });
+    }
+  }
+
   if (!token) {
     return (
       <main className="app-shell login-shell">
@@ -306,7 +403,7 @@ function App() {
           <div>
             <p className="eyebrow">Enterprise Knowledge Agent</p>
             <h1>登录工作台</h1>
-            <p className="muted">Day 3 文档解析与切分。</p>
+            <p className="muted">Day 4 向量化与 Qdrant 检索。</p>
           </div>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -353,16 +450,16 @@ function App() {
           <p className="eyebrow">Enterprise Knowledge Agent</p>
           <h1>企业知识代理工作台</h1>
         </div>
-        <div className="stage-pill">Day 3</div>
+        <div className="stage-pill">Day 4</div>
       </section>
 
       <section className="status-grid">
         <div className="panel stage-panel">
           <p className="label">当前阶段</p>
-          <h2>文档解析与文本切分</h2>
+          <h2>向量化与 Qdrant 检索</h2>
           <p className="muted">
-            当前版本将上传文件写入 MySQL，支持 PDF/Markdown 解析，并把文本保存为
-            800-1000 字符左右的 chunk。
+            当前版本把已解析 chunk 写入 Qdrant collection
+            `knowledge_chunks`，并提供基础相似片段检索。
           </p>
         </div>
 
@@ -436,7 +533,7 @@ function App() {
           <div className="documents-header">
             <div>
               <p className="label">已上传文档</p>
-              <h2>解析队列</h2>
+              <h2>解析与向量化队列</h2>
             </div>
             <button
               className="secondary-action"
@@ -450,44 +547,115 @@ function App() {
           <p className="documents-message">{documentsMessage}</p>
 
           <div className="document-list">
-            {documents.map((document) => (
-              <article className="document-item" key={document.id}>
-                <div className="document-main">
-                  <div>
-                    <h3>{document.filename}</h3>
-                    <p>
-                      {formatFileSize(document.file_size)} ·{" "}
-                      {formatUploadTime(document.uploaded_at)}
-                    </p>
+            {documents.map((document) => {
+              const embeddingStatus = document.embedding_status ?? "pending";
+              return (
+                <article className="document-item" key={document.id}>
+                  <div className="document-main">
+                    <div>
+                      <h3>{document.filename}</h3>
+                      <p>
+                        {formatFileSize(document.file_size)} ·{" "}
+                        {formatUploadTime(document.uploaded_at)}
+                      </p>
+                    </div>
+                    <div className="document-meta">
+                      <span className={`status-badge ${document.parse_status}`}>
+                        {parseStatusLabel[document.parse_status]}
+                      </span>
+                      <span className={`status-badge ${embeddingStatus}`}>
+                        {embeddingStatusLabel[embeddingStatus]}
+                      </span>
+                      <span>{document.chunk_count} chunks</span>
+                    </div>
                   </div>
-                  <div className="document-meta">
-                    <span className={`status-badge ${document.parse_status}`}>
-                      {parseStatusLabel[document.parse_status]}
-                    </span>
-                    <span>{document.chunk_count} chunks</span>
+                  <div className="document-actions">
+                    <button
+                      className="secondary-action"
+                      disabled={parsingDocumentId === document.id}
+                      type="button"
+                      onClick={() => void parseDocument(document)}
+                    >
+                      {parsingDocumentId === document.id ? "解析中..." : "解析文档"}
+                    </button>
+                    <button
+                      className="secondary-action"
+                      disabled={
+                        document.parse_status !== "parsed" ||
+                        embeddingDocumentId === document.id
+                      }
+                      type="button"
+                      onClick={() => void embedDocument(document)}
+                    >
+                      {embeddingDocumentId === document.id ? "向量化中..." : "向量化"}
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => void showChunks(document)}
+                    >
+                      查看切分结果
+                    </button>
                   </div>
-                </div>
-                <div className="document-actions">
-                  <button
-                    className="secondary-action"
-                    disabled={parsingDocumentId === document.id}
-                    type="button"
-                    onClick={() => void parseDocument(document)}
-                  >
-                    {parsingDocumentId === document.id ? "解析中..." : "解析文档"}
-                  </button>
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    onClick={() => void showChunks(document)}
-                  >
-                    查看切分结果
-                  </button>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </section>
+      </section>
+
+      <section className="panel search-panel">
+        <div>
+          <p className="label">知识库检索测试</p>
+          <h2>从 Qdrant 返回相关片段</h2>
+          <p className={`documents-message ${searchState.status}`}>
+            {searchState.message}
+          </p>
+        </div>
+
+        <form className="search-form" onSubmit={handleSearch}>
+          <label>
+            问题
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="输入一个检索问题"
+            />
+          </label>
+          <label>
+            Top K
+            <input
+              min={1}
+              max={20}
+              type="number"
+              value={topK}
+              onChange={(event) => setTopK(Number(event.target.value))}
+            />
+          </label>
+          <button
+            className="primary-action"
+            disabled={searchState.status === "searching"}
+            type="submit"
+          >
+            {searchState.status === "searching" ? "搜索中..." : "搜索"}
+          </button>
+        </form>
+
+        <div className="search-results">
+          {searchResults.map((result) => (
+            <article className="search-result-item" key={`${result.chunk_id}-${result.score}`}>
+              <div className="chunk-header">
+                <span>{result.filename}</span>
+                <span>
+                  {result.page_number ? `第 ${result.page_number} 页 · ` : ""}
+                  score {result.score.toFixed(4)}
+                </span>
+              </div>
+              <h3>Chunk {result.chunk_index + 1}</h3>
+              <p>{result.content}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="panel chunks-panel">

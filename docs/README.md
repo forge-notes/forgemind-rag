@@ -1,6 +1,6 @@
-# Day 3 Notes
+# Day 4 Notes
 
-Day 3 adds document parsing and text chunking on top of the existing login and upload flow.
+Day 4 adds chunk embedding, Qdrant storage, and basic vector search.
 
 Included services:
 
@@ -9,22 +9,21 @@ Included services:
 - MySQL 8
 - Qdrant
 
-Included Day 3 features:
+Included Day 4 features:
 
-- MySQL tables: `documents` and `document_chunks`
-- Demo login with `admin` / `admin123`
-- PDF and Markdown upload to `/app/uploads`
-- PDF parsing with PyMuPDF
-- Markdown parsing by reading text content
-- Simple 900-character chunking with 120-character overlap
-- Frontend parse action and chunk preview
+- MySQL embedding fields on `documents` and `document_chunks`
+- Qdrant collection: `knowledge_chunks`
+- Pluggable embedding service configured by `EMBEDDING_*`
+- Demo `local_hash` embedding provider
+- `POST /api/documents/{document_id}/embed`
+- `POST /api/search`
+- Frontend vectorization button and search result preview
 
 Not included yet:
 
-- Vectorization
-- Qdrant document writes
-- DeepSeek or any LLM
-- RAG
+- RAG answer generation
+- DeepSeek or any answer-generating LLM
+- Chat UI
 - RBAC
 - MinIO
 - Redis

@@ -1,3 +1,5 @@
+import hashlib
+import math
 import os
 import re
 import shutil
@@ -8,9 +10,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import fitz
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from qdrant_client import QdrantClient, models
 from sqlalchemy import (
     BigInteger,
     DateTime,
@@ -19,18 +23,21 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
 APP_NAME = "Enterprise Knowledge Agent"
 APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
-APP_STAGE = os.getenv("APP_STAGE", "Day 3")
+APP_STAGE = os.getenv("APP_STAGE", "Day 4")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "mysql+pymysql://eka_user:eka_password@mysql:3306/enterprise_knowledge_agent",
 )
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+QDRANT_COLLECTION = "knowledge_chunks"
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/app/uploads")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 DEMO_USERNAME = "admin"
@@ -56,8 +63,10 @@ class Document(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parse_status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    embedding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentChunk(Base):
@@ -73,7 +82,10 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    vector_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class LoginRequest(BaseModel):
@@ -81,8 +93,113 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class EmbeddingConfigError(ValueError):
+    pass
+
+
+class EmbeddingService:
+    def __init__(self) -> None:
+        self.provider = os.getenv("EMBEDDING_PROVIDER", "").strip().lower()
+        self.model = os.getenv("EMBEDDING_MODEL", "").strip()
+        self.api_base = os.getenv("EMBEDDING_API_BASE", "").strip().rstrip("/")
+        self.api_key = os.getenv("EMBEDDING_API_KEY", "").strip()
+        self.dim = self._read_dimension()
+
+    def _read_dimension(self) -> int:
+        value = os.getenv("EMBEDDING_DIM", "").strip()
+        if not value:
+            return 0
+        try:
+            dimension = int(value)
+        except ValueError as exc:
+            raise EmbeddingConfigError("EMBEDDING_DIM must be an integer.") from exc
+        if dimension <= 0:
+            raise EmbeddingConfigError("EMBEDDING_DIM must be greater than 0.")
+        return dimension
+
+    def validate(self) -> None:
+        if not self.provider:
+            raise EmbeddingConfigError("EMBEDDING_PROVIDER is required.")
+        if not self.dim:
+            raise EmbeddingConfigError("EMBEDDING_DIM is required.")
+        if self.provider in {"local_hash", "hash"}:
+            return
+        if self.provider in {"openai", "openai_compatible"}:
+            missing = [
+                name
+                for name, value in {
+                    "EMBEDDING_MODEL": self.model,
+                    "EMBEDDING_API_BASE": self.api_base,
+                    "EMBEDDING_API_KEY": self.api_key,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise EmbeddingConfigError(
+                    f"Missing embedding configuration: {', '.join(missing)}."
+                )
+            return
+        raise EmbeddingConfigError(
+            "Unsupported EMBEDDING_PROVIDER. Use local_hash or openai_compatible."
+        )
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.validate()
+        if self.provider in {"local_hash", "hash"}:
+            return [self._local_hash_embedding(text_value) for text_value in texts]
+        return self._openai_compatible_embeddings(texts)
+
+    def embed_text(self, text_value: str) -> list[float]:
+        return self.embed_texts([text_value])[0]
+
+    def _local_hash_embedding(self, text_value: str) -> list[float]:
+        tokens = re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]", text_value.lower())
+        if not tokens:
+            tokens = list(text_value.lower())
+
+        vector = [0.0] * self.dim
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:4], "big") % self.dim
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            vector[index] += sign
+
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return vector
+        return [value / norm for value in vector]
+
+    def _openai_compatible_embeddings(self, texts: list[str]) -> list[list[float]]:
+        response = httpx.post(
+            f"{self.api_base}/embeddings",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": self.model, "input": texts},
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        embeddings = [item["embedding"] for item in payload.get("data", [])]
+        if len(embeddings) != len(texts):
+            raise RuntimeError("Embedding API returned an unexpected number of vectors.")
+        for embedding in embeddings:
+            if len(embedding) != self.dim:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch: expected {self.dim}, got {len(embedding)}."
+                )
+        return embeddings
+
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+qdrant_client = QdrantClient(url=QDRANT_URL, timeout=30)
 
 
 def _cors_origins() -> list[str]:
@@ -141,8 +258,10 @@ def _document_response(document: Document) -> dict[str, object]:
         "file_size": document.file_size,
         "parse_status": document.parse_status,
         "chunk_count": document.chunk_count,
+        "embedding_status": document.embedding_status,
         "uploaded_at": document.uploaded_at.isoformat(),
         "parsed_at": document.parsed_at.isoformat() if document.parsed_at else None,
+        "embedded_at": document.embedded_at.isoformat() if document.embedded_at else None,
     }
 
 
@@ -154,7 +273,10 @@ def _chunk_response(chunk: DocumentChunk) -> dict[str, object]:
         "content": chunk.content,
         "page_number": chunk.page_number,
         "char_count": chunk.char_count,
+        "vector_id": chunk.vector_id,
+        "embedding_status": chunk.embedding_status,
         "created_at": chunk.created_at.isoformat(),
+        "embedded_at": chunk.embedded_at.isoformat() if chunk.embedded_at else None,
     }
 
 
@@ -209,6 +331,92 @@ def _extract_chunks(document: Document) -> list[tuple[str, int | None]]:
     raise ValueError(f"Unsupported file type: {document.file_type}")
 
 
+def _ensure_database_schema() -> None:
+    Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    existing_documents = {column["name"] for column in inspector.get_columns("documents")}
+    existing_chunks = {column["name"] for column in inspector.get_columns("document_chunks")}
+
+    with engine.begin() as connection:
+        if "embedding_status" not in existing_documents:
+            connection.execute(
+                text(
+                    "ALTER TABLE documents "
+                    "ADD COLUMN embedding_status VARCHAR(32) NOT NULL DEFAULT 'pending'"
+                )
+            )
+        if "embedded_at" not in existing_documents:
+            connection.execute(text("ALTER TABLE documents ADD COLUMN embedded_at DATETIME NULL"))
+        if "vector_id" not in existing_chunks:
+            connection.execute(text("ALTER TABLE document_chunks ADD COLUMN vector_id VARCHAR(128) NULL"))
+        if "embedding_status" not in existing_chunks:
+            connection.execute(
+                text(
+                    "ALTER TABLE document_chunks "
+                    "ADD COLUMN embedding_status VARCHAR(32) NOT NULL DEFAULT 'pending'"
+                )
+            )
+        if "embedded_at" not in existing_chunks:
+            connection.execute(text("ALTER TABLE document_chunks ADD COLUMN embedded_at DATETIME NULL"))
+
+
+def _embedding_service() -> EmbeddingService:
+    return EmbeddingService()
+
+
+def _embedding_error_response(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=f"Embedding configuration error: {exc}")
+
+
+def _ensure_qdrant_collection(embedding_service: EmbeddingService) -> None:
+    embedding_service.validate()
+    try:
+        exists = qdrant_client.collection_exists(QDRANT_COLLECTION)
+        if not exists:
+            qdrant_client.create_collection(
+                collection_name=QDRANT_COLLECTION,
+                vectors_config=models.VectorParams(
+                    size=embedding_service.dim,
+                    distance=models.Distance.COSINE,
+                ),
+            )
+            return
+
+        collection = qdrant_client.get_collection(QDRANT_COLLECTION)
+        vectors_config = collection.config.params.vectors
+        existing_size = getattr(vectors_config, "size", None)
+        if isinstance(vectors_config, dict):
+            first_vector = next(iter(vectors_config.values()))
+            existing_size = getattr(first_vector, "size", None)
+        if existing_size and existing_size != embedding_service.dim:
+            raise EmbeddingConfigError(
+                f"Qdrant collection dimension is {existing_size}, "
+                f"but EMBEDDING_DIM is {embedding_service.dim}."
+            )
+    except EmbeddingConfigError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Unable to prepare Qdrant collection: {exc}") from exc
+
+
+def _qdrant_search(query_vector: list[float], top_k: int):
+    if hasattr(qdrant_client, "search"):
+        return qdrant_client.search(
+            collection_name=QDRANT_COLLECTION,
+            query_vector=query_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+
+    result = qdrant_client.query_points(
+        collection_name=QDRANT_COLLECTION,
+        query=query_vector,
+        limit=top_k,
+        with_payload=True,
+    )
+    return result.points
+
+
 def _sync_existing_uploads() -> None:
     upload_root = _upload_root()
     with SessionLocal() as db:
@@ -233,8 +441,10 @@ def _sync_existing_uploads() -> None:
                     file_size=file_path.stat().st_size,
                     parse_status="uploaded",
                     chunk_count=0,
+                    embedding_status="pending",
                     uploaded_at=datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc),
                     parsed_at=None,
+                    embedded_at=None,
                 )
             )
         db.commit()
@@ -251,7 +461,7 @@ def get_db() -> Iterator[Session]:
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
-    description="Day 3 FastAPI service for parsing and chunking uploaded documents.",
+    description="Day 4 FastAPI service for embedding and Qdrant search.",
 )
 
 app.add_middleware(
@@ -266,7 +476,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     _upload_root()
-    Base.metadata.create_all(bind=engine)
+    _ensure_database_schema()
     _sync_existing_uploads()
 
 
@@ -341,8 +551,10 @@ def upload_document(
         file_size=destination.stat().st_size,
         parse_status="uploaded",
         chunk_count=0,
+        embedding_status="pending",
         uploaded_at=_utc_now(),
         parsed_at=None,
+        embedded_at=None,
     )
     db.add(document)
     db.commit()
@@ -368,7 +580,9 @@ def parse_document(
 
     document.parse_status = "parsing"
     document.chunk_count = 0
+    document.embedding_status = "pending"
     document.parsed_at = None
+    document.embedded_at = None
     db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
     db.commit()
 
@@ -383,7 +597,10 @@ def parse_document(
                     content=content,
                     page_number=page_number,
                     char_count=len(content),
+                    vector_id=None,
+                    embedding_status="pending",
                     created_at=created_at,
+                    embedded_at=None,
                 )
             )
 
@@ -399,7 +616,9 @@ def parse_document(
         if document is not None:
             document.parse_status = "failed"
             document.chunk_count = 0
+            document.embedding_status = "pending"
             document.parsed_at = None
+            document.embedded_at = None
             db.commit()
         raise HTTPException(status_code=500, detail=f"Parse failed: {exc}") from exc
 
@@ -423,3 +642,122 @@ def list_document_chunks(
         "document": _document_response(document),
         "chunks": [_chunk_response(chunk) for chunk in chunks],
     }
+
+
+@app.post("/api/documents/{document_id}/embed")
+def embed_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if document.parse_status != "parsed":
+        raise HTTPException(status_code=400, detail="Please parse the document before embedding.")
+
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == document.id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .all()
+    )
+    if not chunks:
+        raise HTTPException(status_code=400, detail="No chunks found for this document.")
+
+    try:
+        embedding_service = _embedding_service()
+        _ensure_qdrant_collection(embedding_service)
+    except EmbeddingConfigError as exc:
+        raise _embedding_error_response(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    document.embedding_status = "embedding"
+    document.embedded_at = None
+    for chunk in chunks:
+        chunk.embedding_status = "embedding"
+        chunk.embedded_at = None
+    db.commit()
+
+    try:
+        embeddings = embedding_service.embed_texts([chunk.content for chunk in chunks])
+        embedded_at = _utc_now()
+        points: list[models.PointStruct] = []
+
+        for chunk, embedding in zip(chunks, embeddings):
+            vector_id = chunk.vector_id or str(uuid4())
+            chunk.vector_id = vector_id
+            chunk.embedding_status = "embedded"
+            chunk.embedded_at = embedded_at
+            points.append(
+                models.PointStruct(
+                    id=vector_id,
+                    vector=embedding,
+                    payload={
+                        "document_id": document.id,
+                        "chunk_id": chunk.id,
+                        "filename": document.original_filename,
+                        "chunk_index": chunk.chunk_index,
+                        "page_number": chunk.page_number,
+                        "content": chunk.content,
+                    },
+                )
+            )
+
+        qdrant_client.upsert(collection_name=QDRANT_COLLECTION, points=points)
+        document.embedding_status = "embedded"
+        document.embedded_at = embedded_at
+        db.commit()
+        db.refresh(document)
+        return _document_response(document)
+    except EmbeddingConfigError as exc:
+        db.rollback()
+        raise _embedding_error_response(exc) from exc
+    except Exception as exc:
+        db.rollback()
+        document = db.get(Document, document_id)
+        if document is not None:
+            document.embedding_status = "failed"
+            document.embedded_at = None
+            (
+                db.query(DocumentChunk)
+                .filter(DocumentChunk.document_id == document.id)
+                .update({"embedding_status": "failed", "embedded_at": None})
+            )
+            db.commit()
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {exc}") from exc
+
+
+@app.post("/api/search")
+def search_chunks(payload: SearchRequest) -> dict[str, object]:
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required.")
+    top_k = max(1, min(payload.top_k, 20))
+
+    try:
+        embedding_service = _embedding_service()
+        _ensure_qdrant_collection(embedding_service)
+        query_vector = embedding_service.embed_text(query)
+        search_results = _qdrant_search(query_vector, top_k)
+    except EmbeddingConfigError as exc:
+        raise _embedding_error_response(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
+
+    results = []
+    for item in search_results:
+        item_payload = item.payload or {}
+        results.append(
+            {
+                "document_id": item_payload.get("document_id"),
+                "filename": item_payload.get("filename"),
+                "chunk_id": item_payload.get("chunk_id"),
+                "chunk_index": item_payload.get("chunk_index"),
+                "page_number": item_payload.get("page_number"),
+                "score": float(getattr(item, "score", 0.0)),
+                "content": item_payload.get("content", ""),
+            }
+        )
+
+    return {"query": query, "top_k": top_k, "results": results}
