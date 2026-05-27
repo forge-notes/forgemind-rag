@@ -1,6 +1,6 @@
-# Day 4 Notes
+# Day 5 Notes
 
-Day 4 adds chunk embedding, Qdrant storage, and basic vector search.
+Day 5 adds single-turn RAG question answering.
 
 Included services:
 
@@ -8,23 +8,24 @@ Included services:
 - React + Vite + TypeScript frontend
 - MySQL 8
 - Qdrant
+- Ollama embedding model: `bge-m3:latest`
+- Ollama chat model: `qwen2.5:7b`
 
-Included Day 4 features:
+Included Day 5 features:
 
-- MySQL embedding fields on `documents` and `document_chunks`
-- Qdrant collection: `knowledge_chunks`
-- Pluggable embedding service configured by `EMBEDDING_*`
-- Ollama `bge-m3:latest` embedding provider
-- `POST /api/documents/{document_id}/embed`
-- `POST /api/search`
-- Frontend vectorization button and search result preview
+- `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_BASE`, `LLM_API_KEY`
+- Ollama `/api/chat` call with `stream=false`
+- RAG service that retrieves top-k chunks from Qdrant
+- Prompt with source-only answering rules
+- `POST /api/ask`
+- Frontend knowledge-base Q&A panel
+- Answer and source citation display
 
-Not included yet:
+Not included:
 
-- RAG answer generation
-- DeepSeek or any answer-generating LLM
-- Qwen answer generation
-- Chat UI
+- Multi-turn chat
+- Q&A history
+- Streaming output
 - RBAC
 - MinIO
 - Redis

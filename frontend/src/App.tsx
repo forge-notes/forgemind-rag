@@ -48,6 +48,15 @@ type SearchResult = {
   content: string;
 };
 
+type RagSource = {
+  document_id: number;
+  filename: string;
+  chunk_index: number;
+  page_number: number | null;
+  score: number;
+  content: string;
+};
+
 type LoginState =
   | { status: "idle"; message: string }
   | { status: "checking"; message: string }
@@ -69,6 +78,12 @@ type UploadState =
 type SearchState =
   | { status: "idle"; message: string }
   | { status: "searching"; message: string }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type AskState =
+  | { status: "idle"; message: string }
+  | { status: "asking"; message: string }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
@@ -168,6 +183,14 @@ function App() {
     message: "输入问题后检索 Qdrant 中的相关片段",
   });
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [ragQuestion, setRagQuestion] = useState("");
+  const [ragTopK, setRagTopK] = useState(5);
+  const [askState, setAskState] = useState<AskState>({
+    status: "idle",
+    message: "输入问题后基于知识库生成回答",
+  });
+  const [ragAnswer, setRagAnswer] = useState("");
+  const [ragSources, setRagSources] = useState<RagSource[]>([]);
 
   const backendHealthUrl = useMemo(() => `${backendBaseUrl}/api/health`, []);
   const loginUrl = useMemo(() => `${backendBaseUrl}/api/auth/login`, []);
@@ -177,6 +200,7 @@ function App() {
     [],
   );
   const searchUrl = useMemo(() => `${backendBaseUrl}/api/search`, []);
+  const askUrl = useMemo(() => `${backendBaseUrl}/api/ask`, []);
 
   async function loadDocuments() {
     setDocumentsMessage("正在加载文档列表...");
@@ -396,6 +420,38 @@ function App() {
     }
   }
 
+  async function handleAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAskState({ status: "asking", message: "正在生成知识库回答..." });
+    setRagAnswer("");
+    setRagSources([]);
+
+    try {
+      const response = await fetch(askUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question: ragQuestion, top_k: ragTopK }),
+      });
+      await ensureOk(response);
+
+      const data = (await response.json()) as {
+        answer: string;
+        sources: RagSource[];
+      };
+      setRagAnswer(data.answer);
+      setRagSources(data.sources);
+      setAskState({
+        status: "success",
+        message: data.sources.length > 0 ? "回答已生成" : "回答已生成，但没有来源片段",
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      setAskState({ status: "error", message: `问答失败：${detail}` });
+    }
+  }
+
   if (!token) {
     return (
       <main className="app-shell login-shell">
@@ -403,7 +459,7 @@ function App() {
           <div>
             <p className="eyebrow">Enterprise Knowledge Agent</p>
             <h1>登录工作台</h1>
-            <p className="muted">Day 4 向量化与 Qdrant 检索。</p>
+            <p className="muted">Day 5 RAG 问答。</p>
           </div>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -450,16 +506,15 @@ function App() {
           <p className="eyebrow">Enterprise Knowledge Agent</p>
           <h1>企业知识代理工作台</h1>
         </div>
-        <div className="stage-pill">Day 4</div>
+        <div className="stage-pill">Day 5</div>
       </section>
 
       <section className="status-grid">
         <div className="panel stage-panel">
           <p className="label">当前阶段</p>
-          <h2>向量化与 Qdrant 检索</h2>
+          <h2>RAG 问答</h2>
           <p className="muted">
-            当前版本把已解析 chunk 写入 Qdrant collection
-            `knowledge_chunks`，并提供基础相似片段检索。
+            当前版本会先检索 Qdrant 中的相关 chunks，再调用 Ollama 聊天模型基于参考资料生成回答。
           </p>
         </div>
 
@@ -602,6 +657,68 @@ function App() {
             })}
           </div>
         </section>
+      </section>
+
+      <section className="panel ask-panel">
+        <div>
+          <p className="label">知识库问答</p>
+          <h2>基于来源片段生成回答</h2>
+          <p className={`documents-message ${askState.status}`}>
+            {askState.message}
+          </p>
+        </div>
+
+        <form className="ask-form" onSubmit={handleAsk}>
+          <label>
+            问题
+            <textarea
+              value={ragQuestion}
+              onChange={(event) => setRagQuestion(event.target.value)}
+              placeholder="输入一个希望基于知识库回答的问题"
+            />
+          </label>
+          <label>
+            Top K
+            <input
+              min={1}
+              max={20}
+              type="number"
+              value={ragTopK}
+              onChange={(event) => setRagTopK(Number(event.target.value))}
+            />
+          </label>
+          <button
+            className="primary-action"
+            disabled={askState.status === "asking"}
+            type="submit"
+          >
+            {askState.status === "asking" ? "生成中..." : "发送"}
+          </button>
+        </form>
+
+        {ragAnswer ? (
+          <article className="answer-box">
+            <p>{ragAnswer}</p>
+          </article>
+        ) : null}
+
+        <div className="source-list">
+          {ragSources.map((source, index) => (
+            <article
+              className="source-item"
+              key={`${source.document_id}-${source.chunk_index}-${index}`}
+            >
+              <div className="chunk-header">
+                <span>{source.filename}</span>
+                <span>
+                  {source.page_number ? `第 ${source.page_number} 页 · ` : ""}
+                  Chunk {source.chunk_index + 1} · score {source.score.toFixed(4)}
+                </span>
+              </div>
+              <p>{source.content}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="panel search-panel">

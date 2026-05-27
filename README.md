@@ -1,8 +1,8 @@
 # Enterprise Knowledge Agent
 
-企业知识代理项目，用于后续构建企业知识库、文档解析、向量检索、RAG 问答和权限控制能力。
+企业知识代理项目，用于构建企业知识库、文档解析、向量检索、RAG 问答和权限控制能力。
 
-当前仓库已完成 Day 4：向量化与 Qdrant 基础检索。
+当前仓库已完成 Day 5：RAG 问答。
 
 ## 技术栈
 
@@ -12,26 +12,34 @@
 - Vector Database: Qdrant
 - Deployment: Docker Compose
 - PDF Parser: PyMuPDF
-- Embedding: pluggable embedding service
+- Embedding: Ollama `bge-m3:latest`
+- LLM: Ollama `qwen2.5:7b`
 
 ## 启动方式
 
-MacBook 只负责写代码和 Git 推送，不需要安装 Docker、MySQL、Python、Node.js 或 Qdrant。
+MacBook 只负责写代码和 Git 推送，不需要安装 Docker、MySQL、Python、Node.js、Qdrant 或 Ollama。
 
-i5 Ubuntu 服务器负责运行全部服务。服务器需要安装 Docker 和 Docker Compose，然后在项目根目录执行：
+i5 Ubuntu 服务器负责运行 Docker Compose 服务。Ollama 可以在局域网其他机器运行，API 地址通过 `.env` 配置。
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
 
-如果已经有 Day 1/Day 2/Day 3 的 `.env`，请补齐 Day 4 的 `EMBEDDING_*` 配置，并确认：
+如果已经有旧 `.env`，请补齐 Day 5 配置，并确认：
 
-```bash
-APP_STAGE=Day 4
+```env
+APP_STAGE=Day 5
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=bge-m3:latest
+EMBEDDING_API_BASE=http://192.168.9.39:11434
+EMBEDDING_DIM=1024
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:7b
+LLM_API_BASE=http://192.168.9.39:11434
 ```
 
-Day 4 默认使用本地 Ollama 的 `bge-m3:latest` 做真实 embedding。`qwen`、`deepseek` 等生成模型暂不用于 Day 4，后续 RAG 回答阶段再接入。
+`bge-m3` 只用于 embedding，`qwen2.5` 用于生成最终回答。
 
 ## 常用访问地址
 
@@ -40,30 +48,10 @@ Day 4 默认使用本地 Ollama 的 `bge-m3:latest` 做真实 embedding。`qwen`
 - Backend API docs: http://localhost:8000/docs
 - Documents API: http://localhost:8000/api/documents
 - Search API: http://localhost:8000/api/search
-- Qdrant API: http://localhost:6333
+- Ask API: http://localhost:8000/api/ask
 - Qdrant dashboard: http://localhost:6333/dashboard
 
 如果在局域网访问 i5 Ubuntu 服务器，请把 `localhost` 替换为服务器 IP。
-
-当前部署地址：
-
-前端工作台：
-http://192.168.3.93:5173
-
-后端 API 文档：
-http://192.168.3.93:8000/docs
-
-Qdrant 控制台：
-http://192.168.3.93:6333/dashboard
-
-## Docker Compose 服务
-
-- `mysql`: MySQL 8，数据持久化到 `mysql_data` volume
-- `qdrant`: Qdrant，数据持久化到 `qdrant_data` volume
-- `backend`: FastAPI，使用服务名 `mysql`、`qdrant` 连接依赖服务
-- `frontend`: React + Vite + TypeScript，提供登录、上传、解析、向量化和检索测试
-
-`uploads/` 会挂载到后端容器的 `/app/uploads`。
 
 ## 当前进度
 
@@ -71,25 +59,23 @@ http://192.168.3.93:6333/dashboard
 
 - Day 1 工程初始化和 Docker Compose 可运行底座
 - Day 2 简单登录、PDF/Markdown 上传、uploads 文件列表展示
-- Day 3 MySQL 表：`documents`、`document_chunks`
 - Day 3 PDF / Markdown 解析和文本切分
-- Day 4 MySQL 字段：`embedding_status`、`embedded_at`、`vector_id`
-- Day 4 Qdrant collection：`knowledge_chunks`
 - Day 4 chunk embedding、Qdrant 入库、基础相似检索
-- Day 4 前端向量化按钮和知识库检索测试区
+- Day 5 基于检索 chunks 的 RAG 问答
+- Day 5 前端知识库问答区域和来源引用展示
 
 暂未实现：
 
-- DeepSeek 或其他大模型生成答案
-- RAG 问答
-- 聊天页面
+- 多轮聊天
+- 问答历史保存
+- 流式输出
 - RBAC
 - MinIO
 - Redis
 - Celery
 - Nginx
 
-## Day 4 接口
+## Day 5 接口
 
 - `POST /api/auth/login`
 - `POST /api/documents/upload`
@@ -98,44 +84,28 @@ http://192.168.3.93:6333/dashboard
 - `GET /api/documents/{document_id}/chunks`
 - `POST /api/documents/{document_id}/embed`
 - `POST /api/search`
+- `POST /api/ask`
 
-`POST /api/documents/{document_id}/embed` 会读取文档 chunks，生成 embedding，写入 Qdrant 的 `knowledge_chunks` collection，并更新 MySQL embedding 状态。
+`POST /api/ask` 请求：
 
-`POST /api/search` 只返回相关 chunks，不生成最终答案。
-
-## Embedding 配置
-
-默认使用本地 Ollama：
-
-```env
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=bge-m3:latest
-EMBEDDING_API_BASE=http://192.168.9.39:11434
-EMBEDDING_API_KEY=
-EMBEDDING_DIM=1024
+```json
+{
+  "question": "问题内容",
+  "top_k": 5
+}
 ```
 
-仍可改为无需外部服务的演示 provider：
+响应包含：
 
-```env
-EMBEDDING_PROVIDER=local_hash
-EMBEDDING_MODEL=local-hash-demo
-EMBEDDING_API_BASE=
-EMBEDDING_API_KEY=
-EMBEDDING_DIM=384
-```
+- `answer`: Ollama 聊天模型基于参考资料生成的回答
+- `sources`: Qdrant 检索到的来源 chunks
 
-也可改为外部 OpenAI-compatible embedding 服务：
+Prompt 约束：
 
-```env
-EMBEDDING_PROVIDER=openai_compatible
-EMBEDDING_MODEL=your-embedding-model
-EMBEDDING_API_BASE=https://your-api.example.com/v1
-EMBEDDING_API_KEY=your-api-key
-EMBEDDING_DIM=1024
-```
-
-如果 embedding 配置缺失或维度与 Qdrant collection 不一致，后端会返回清晰错误。若之前已经用 `local_hash` 创建过 384 维 `knowledge_chunks` collection，切换到 `bge-m3` 的 1024 维前需要清空或删除旧 collection 后重新向量化。
+- 只根据参考资料回答
+- 资料不足时说明“当前知识库中没有找到足够信息”
+- 不编造
+- 回答简洁、准确、结构清晰
 
 ## 验证命令
 
@@ -143,9 +113,9 @@ EMBEDDING_DIM=1024
 curl http://localhost:8000/api/documents
 curl -X POST http://localhost:8000/api/documents/1/parse
 curl -X POST http://localhost:8000/api/documents/1/embed
-curl -X POST http://localhost:8000/api/search \
+curl -X POST http://localhost:8000/api/ask \
   -H "Content-Type: application/json" \
-  -d '{"query":"你的问题","top_k":5}'
+  -d '{"question":"你的问题","top_k":5}'
 ```
 
 ## 演示账号

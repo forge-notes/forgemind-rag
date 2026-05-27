@@ -31,7 +31,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 APP_NAME = "Enterprise Knowledge Agent"
 APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
-APP_STAGE = os.getenv("APP_STAGE", "Day 4")
+APP_STAGE = os.getenv("APP_STAGE", "Day 5")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "mysql+pymysql://eka_user:eka_password@mysql:3306/enterprise_knowledge_agent",
@@ -98,7 +98,16 @@ class SearchRequest(BaseModel):
     top_k: int = 5
 
 
+class AskRequest(BaseModel):
+    question: str
+    top_k: int = 5
+
+
 class EmbeddingConfigError(ValueError):
+    pass
+
+
+class LLMConfigError(ValueError):
     pass
 
 
@@ -229,6 +238,60 @@ class EmbeddingService:
                     f"Embedding dimension mismatch: expected {self.dim}, got {len(embedding)}."
                 )
         return embeddings
+
+
+class LLMService:
+    def __init__(self) -> None:
+        self.provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+        self.model = os.getenv("LLM_MODEL", "").strip()
+        self.api_base = os.getenv("LLM_API_BASE", "").strip().rstrip("/")
+        self.api_key = os.getenv("LLM_API_KEY", "").strip()
+
+    def validate(self) -> None:
+        if not self.provider:
+            raise LLMConfigError("LLM_PROVIDER is required.")
+        if self.provider != "ollama":
+            raise LLMConfigError("Unsupported LLM_PROVIDER. Use ollama.")
+        missing = [
+            name
+            for name, value in {
+                "LLM_MODEL": self.model,
+                "LLM_API_BASE": self.api_base,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise LLMConfigError(f"Missing LLM configuration: {', '.join(missing)}.")
+
+    def generate(self, prompt: str) -> str:
+        self.validate()
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            response = httpx.post(
+                f"{self.api_base}/api/chat",
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
+                timeout=180,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            raise RuntimeError(f"Ollama chat failed: HTTP {exc.response.status_code} {detail}") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Ollama chat request failed: {exc}") from exc
+
+        payload = response.json()
+        answer = payload.get("message", {}).get("content", "")
+        if not answer:
+            raise RuntimeError("Ollama chat returned an empty answer.")
+        return answer.strip()
 
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -402,6 +465,10 @@ def _embedding_error_response(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=f"Embedding configuration error: {exc}")
 
 
+def _llm_error_response(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=f"LLM configuration error: {exc}")
+
+
 def _ensure_qdrant_collection(embedding_service: EmbeddingService) -> None:
     embedding_service.validate()
     try:
@@ -451,6 +518,97 @@ def _qdrant_search(query_vector: list[float], top_k: int):
     return result.points
 
 
+def _search_knowledge_chunks(query: str, top_k: int, include_chunk_id: bool = True) -> list[dict[str, object]]:
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        raise HTTPException(status_code=400, detail="query is required.")
+    safe_top_k = max(1, min(top_k, 20))
+
+    try:
+        embedding_service = _embedding_service()
+        _ensure_qdrant_collection(embedding_service)
+        query_vector = embedding_service.embed_text(cleaned_query)
+        search_results = _qdrant_search(query_vector, safe_top_k)
+    except EmbeddingConfigError as exc:
+        raise _embedding_error_response(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
+
+    sources: list[dict[str, object]] = []
+    for item in search_results:
+        item_payload = item.payload or {}
+        source = {
+            "document_id": item_payload.get("document_id"),
+            "filename": item_payload.get("filename"),
+            "chunk_index": item_payload.get("chunk_index"),
+            "page_number": item_payload.get("page_number"),
+            "score": float(getattr(item, "score", 0.0)),
+            "content": item_payload.get("content", ""),
+        }
+        if include_chunk_id:
+            source["chunk_id"] = item_payload.get("chunk_id")
+        sources.append(source)
+
+    return sources
+
+
+def _build_rag_context(sources: list[dict[str, object]]) -> str:
+    if not sources:
+        return "当前没有检索到参考资料。"
+
+    blocks = []
+    for index, source in enumerate(sources, start=1):
+        page_number = source.get("page_number")
+        page_text = f"第 {page_number} 页" if page_number else "页码未知"
+        blocks.append(
+            "\n".join(
+                [
+                    f"【资料 {index}】",
+                    f"文档名：{source.get('filename')}",
+                    f"页码：{page_text}",
+                    f"chunk_index：{source.get('chunk_index')}",
+                    f"相似度：{source.get('score')}",
+                    "内容：",
+                    str(source.get("content", "")),
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
+def _build_rag_prompt(question: str, context: str) -> str:
+    return f"""你是一个企业知识库问答助手。
+
+请只根据【参考资料】回答用户问题。
+如果参考资料中没有答案，请明确说明“当前知识库中没有找到足够信息”。
+不要编造不存在的信息。
+回答要简洁、准确、结构清晰。
+
+【参考资料】
+{context}
+
+【用户问题】
+{question}
+
+请基于参考资料回答："""
+
+
+class RagService:
+    def __init__(self) -> None:
+        self.llm_service = LLMService()
+
+    def ask(self, question: str, top_k: int) -> dict[str, object]:
+        cleaned_question = question.strip()
+        if not cleaned_question:
+            raise HTTPException(status_code=400, detail="question is required.")
+
+        sources = _search_knowledge_chunks(cleaned_question, top_k, include_chunk_id=False)
+        context = _build_rag_context(sources)
+        prompt = _build_rag_prompt(cleaned_question, context)
+        answer = self.llm_service.generate(prompt)
+        return {"answer": answer, "sources": sources}
+
+
 def _sync_existing_uploads() -> None:
     upload_root = _upload_root()
     with SessionLocal() as db:
@@ -495,7 +653,7 @@ def get_db() -> Iterator[Session]:
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
-    description="Day 4 FastAPI service for embedding and Qdrant search.",
+    description="Day 5 FastAPI service for RAG question answering.",
 )
 
 app.add_middleware(
@@ -769,29 +927,18 @@ def search_chunks(payload: SearchRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="query is required.")
     top_k = max(1, min(payload.top_k, 20))
 
-    try:
-        embedding_service = _embedding_service()
-        _ensure_qdrant_collection(embedding_service)
-        query_vector = embedding_service.embed_text(query)
-        search_results = _qdrant_search(query_vector, top_k)
-    except EmbeddingConfigError as exc:
-        raise _embedding_error_response(exc) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
-
-    results = []
-    for item in search_results:
-        item_payload = item.payload or {}
-        results.append(
-            {
-                "document_id": item_payload.get("document_id"),
-                "filename": item_payload.get("filename"),
-                "chunk_id": item_payload.get("chunk_id"),
-                "chunk_index": item_payload.get("chunk_index"),
-                "page_number": item_payload.get("page_number"),
-                "score": float(getattr(item, "score", 0.0)),
-                "content": item_payload.get("content", ""),
-            }
-        )
+    results = _search_knowledge_chunks(query, top_k)
 
     return {"query": query, "top_k": top_k, "results": results}
+
+
+@app.post("/api/ask")
+def ask_question(payload: AskRequest) -> dict[str, object]:
+    try:
+        return RagService().ask(payload.question, payload.top_k)
+    except LLMConfigError as exc:
+        raise _llm_error_response(exc) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"RAG answer failed: {exc}") from exc
