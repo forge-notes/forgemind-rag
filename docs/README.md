@@ -1,35 +1,43 @@
-# Day 6 Notes
+# Documentation Index
 
-Day 6 adds Q&A history storage and a cleaner demo experience for single-turn RAG.
+Day 7 focuses on deployment presentation and portfolio packaging. Business features remain at the Day 6 scope: upload, parse, chunk, embed, search, RAG answer, source citation, and Q&A history.
 
-Included services:
+## Documents
+
+- [Demo Script](demo-script.md): step-by-step demo flow for interviews and project walkthroughs.
+- [Architecture](architecture.md): system components, data flow, RAG flow, and data tables.
+- [Testing Questions](testing-questions.md): example questions for validating retrieval and answer quality.
+
+## Included Services
 
 - FastAPI backend
 - React + Vite + TypeScript frontend
 - MySQL 8
 - Qdrant
 - Ollama embedding model: `bge-m3:latest`
-- Ollama chat model: `qwen2.5:7b`
+- Ollama chat model: `qwen2.5:7b` or another local chat model
 
-Included Day 6 features:
+## Current Scope
 
-- `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_BASE`, `LLM_API_KEY`
-- Ollama `/api/chat` call with `stream=false`
-- RAG service that retrieves top-k chunks from Qdrant
-- Prompt with source-only answering rules
-- `POST /api/ask`
-- `qa_records` table for Q&A records
-- `GET /api/qa/history` for the latest 20 records
-- Frontend knowledge-base Q&A panel with loading and error states
-- Example question buttons
-- History list that can reload an answer and its sources
-- Source citation cards with concise previews
+Included:
+
+- Document upload
+- PDF / Markdown parsing
+- Text chunking
+- Ollama embedding
+- Qdrant vector search
+- RAG question answering
+- Source citations
+- Q&A history
+- Docker Compose deployment base
+- GitHub README and interview demo documentation
 
 Not included:
 
 - Multi-turn chat
 - Streaming output
 - RBAC
+- Multi-tenancy
 - MinIO
 - Redis
 - Celery
