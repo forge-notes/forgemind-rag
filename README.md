@@ -15,6 +15,10 @@ Enterprise Knowledge Agent 是一个面向企业内部知识库场景的 RAG 应
 - 用户提问时先检索相关 chunks，再调用本地 LLM 基于参考资料生成回答。
 - 前端展示答案、来源引用和问答历史，方便演示和验证效果。
 
+## 项目预览
+
+<img src="docs/screenshots/day6/Day%206.jpeg" width="900" alt="Enterprise Knowledge Agent Day 6 工作台预览" />
+
 ## 核心功能
 
 - 简单登录：固定演示账号 `admin / admin123`。
