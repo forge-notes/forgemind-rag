@@ -1,6 +1,6 @@
 # Demo Script
 
-本文档用于面试或项目演示时按步骤展示 Enterprise Knowledge Agent 的完整最小闭环。
+本文档用于项目演示时按步骤展示 ForgeMind RAG 的完整最小闭环。
 
 ## 访问地址
 
@@ -14,7 +14,7 @@
 2. 使用演示账号登录：
    - Username: `admin`
    - Password: `admin123`
-3. 登录成功后进入企业知识代理工作台。
+3. 登录成功后进入 ForgeMind RAG 工作台。
 
 演示重点：
 

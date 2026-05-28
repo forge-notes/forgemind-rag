@@ -523,7 +523,7 @@ function App() {
       <main className="app-shell login-shell">
         <section className="login-panel">
           <div>
-            <p className="eyebrow">Enterprise Knowledge Agent</p>
+            <p className="eyebrow">ForgeMind RAG</p>
             <h1>登录工作台</h1>
             <p className="muted">Day 6 问答历史与体验优化。</p>
           </div>
@@ -569,8 +569,8 @@ function App() {
     <main className="app-shell">
       <section className="workspace-header">
         <div>
-          <p className="eyebrow">Enterprise Knowledge Agent</p>
-          <h1>企业知识代理工作台</h1>
+          <p className="eyebrow">ForgeMind RAG</p>
+          <h1>企业知识库 RAG 工作台</h1>
         </div>
         <div className="stage-pill">Day 6</div>
       </section>

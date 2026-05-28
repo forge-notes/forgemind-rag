@@ -1,6 +1,8 @@
-# Enterprise Knowledge Agent
+# ForgeMind RAG
 
-Enterprise Knowledge Agent 是一个面向企业内部知识库场景的 RAG 应用原型。项目支持文档上传、PDF / Markdown 解析、文本切分、Ollama `bge-m3` 向量化、Qdrant 相似检索、基于本地 LLM 的知识库问答、来源引用展示和问答历史保存。
+ForgeMind RAG is a lightweight enterprise RAG system for document ingestion, parsing, embedding, vector search, and knowledge-based question answering.
+
+ForgeMind RAG 是一个面向企业知识库场景的轻量级 RAG 系统，支持文档上传、解析切分、向量化、语义检索、知识库问答、来源引用与问答历史。
 
 
 ## 项目背景
@@ -17,7 +19,7 @@ Enterprise Knowledge Agent 是一个面向企业内部知识库场景的 RAG 应
 
 ## 项目预览
 
-<img src="docs/screenshots/day6/Day%206.jpeg" width="900" alt="Enterprise Knowledge Agent Day 6 工作台预览" />
+<img src="docs/screenshots/day6/Day%206.jpeg" width="900" alt="ForgeMind RAG Day 6 工作台预览" />
 
 ## 核心功能
 
@@ -78,9 +80,11 @@ flowchart LR
 
 ## Docker Compose 启动方式
 
-MacBook 只负责写代码和 Git 推送，不需要安装 Docker、MySQL、Python、Node.js、Qdrant 或 Ollama。i5 Ubuntu 服务器负责通过 Docker Compose 运行全部服务。
+MacBook 只负责写代码和 Git 推送，不需要安装 Docker、MySQL、Python、Node.js、Qdrant 或 Ollama。i5 Ubuntu 服务器负责通过 Docker Compose 运行全部服务，建议部署目录使用 `forgemind-rag`。
 
 ```bash
+git clone <your-github-repo-url> forgemind-rag
+cd forgemind-rag
 cp .env.example .env
 docker compose up -d --build
 ```

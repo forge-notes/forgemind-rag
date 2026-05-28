@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
-APP_NAME = "Enterprise Knowledge Agent"
+APP_NAME = "ForgeMind RAG"
 APP_VERSION = os.getenv("APP_VERSION", "0.1.0")
 APP_STAGE = os.getenv("APP_STAGE", "Day 6")
 DATABASE_URL = os.getenv(

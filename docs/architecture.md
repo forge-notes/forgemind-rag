@@ -1,6 +1,6 @@
 # Architecture
 
-Enterprise Knowledge Agent 使用 Docker Compose 组织前端、后端、关系数据库和向量数据库。Ollama 可以运行在局域网内的服务器上，通过环境变量配置 API 地址。
+ForgeMind RAG 使用 Docker Compose 组织前端、后端、关系数据库和向量数据库。Ollama 可以运行在局域网内的服务器上，通过环境变量配置 API 地址。
 
 ## 组件说明
 
