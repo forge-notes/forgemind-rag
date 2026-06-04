@@ -9,7 +9,7 @@ ForgeMind RAG 使用 Docker Compose 组织前端、后端、关系数据库和�
 - MySQL 8：保存文档元数据、chunk 文本、向量化状态和问答历史。
 - Qdrant：保存 chunk 向量和检索 payload。
 - Ollama `bge-m3:latest`：生成文档 chunk 和用户问题的 embedding。
-- Ollama LLM：生成最终回答，例如 `qwen2.5:7b`。
+- Ollama LLM / DeepSeek API：生成最终回答，例如本地 `qwen2.5:7b` 或 `deepseek-v4-flash`。
 - uploads：宿主机目录，挂载到后端容器 `/app/uploads`。
 
 ## 架构图

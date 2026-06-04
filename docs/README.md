@@ -15,7 +15,7 @@ Day 7 focuses on deployment presentation and portfolio packaging. Business featu
 - MySQL 8
 - Qdrant
 - Ollama embedding model: `bge-m3:latest`
-- Ollama chat model: `qwen2.5:7b` or another local chat model
+- Chat model: Ollama `qwen2.5:7b`, DeepSeek API, or another OpenAI-compatible model
 
 ## Current Scope
 

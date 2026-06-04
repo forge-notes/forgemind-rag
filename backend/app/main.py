@@ -266,21 +266,44 @@ class LLMService:
     def validate(self) -> None:
         if not self.provider:
             raise LLMConfigError("LLM_PROVIDER is required.")
-        if self.provider != "ollama":
-            raise LLMConfigError("Unsupported LLM_PROVIDER. Use ollama.")
-        missing = [
-            name
-            for name, value in {
-                "LLM_MODEL": self.model,
-                "LLM_API_BASE": self.api_base,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise LLMConfigError(f"Missing LLM configuration: {', '.join(missing)}.")
+        if self.provider == "ollama":
+            missing = [
+                name
+                for name, value in {
+                    "LLM_MODEL": self.model,
+                    "LLM_API_BASE": self.api_base,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise LLMConfigError(f"Missing LLM configuration: {', '.join(missing)}.")
+            return
+
+        if self.provider in {"deepseek", "openai", "openai_compatible"}:
+            missing = [
+                name
+                for name, value in {
+                    "LLM_MODEL": self.model,
+                    "LLM_API_BASE": self.api_base,
+                    "LLM_API_KEY": self.api_key,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise LLMConfigError(f"Missing LLM configuration: {', '.join(missing)}.")
+            return
+
+        raise LLMConfigError(
+            "Unsupported LLM_PROVIDER. Use ollama, deepseek, or openai_compatible."
+        )
 
     def generate(self, prompt: str) -> str:
         self.validate()
+        if self.provider == "ollama":
+            return self._ollama_chat(prompt)
+        return self._openai_compatible_chat(prompt)
+
+    def _ollama_chat(self, prompt: str) -> str:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -307,6 +330,39 @@ class LLMService:
         answer = payload.get("message", {}).get("content", "")
         if not answer:
             raise RuntimeError("Ollama chat returned an empty answer.")
+        return answer.strip()
+
+    def _openai_compatible_chat(self, prompt: str) -> str:
+        try:
+            response = httpx.post(
+                f"{self.api_base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
+                timeout=180,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            raise RuntimeError(
+                f"{self.provider} chat failed: HTTP {exc.response.status_code} {detail}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"{self.provider} chat request failed: {exc}") from exc
+
+        payload = response.json()
+        choices = payload.get("choices", [])
+        answer = ""
+        if choices:
+            answer = choices[0].get("message", {}).get("content", "")
+        if not answer:
+            raise RuntimeError(f"{self.provider} chat returned an empty answer.")
         return answer.strip()
 
 

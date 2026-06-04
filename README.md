@@ -42,7 +42,7 @@ ForgeMind RAG 是一个面向企业知识库场景的轻量级 RAG 系统，支�
 - Vector Database: Qdrant
 - PDF Parser: PyMuPDF
 - Embedding: Ollama `bge-m3:latest`
-- LLM: Ollama `qwen2.5:7b` 或其他本地聊天模型
+- LLM: Ollama `qwen2.5:7b`、DeepSeek API 或其他 OpenAI-compatible 聊天模型
 - Deployment: Docker Compose
 
 ## 系统架构
@@ -111,7 +111,14 @@ LLM_MODEL=qwen2.5:7b
 LLM_API_BASE=http://192.168.9.39:11434
 ```
 
-`bge-m3` 只用于 embedding，`qwen2.5` 或其他 Ollama 聊天模型用于生成最终回答。
+`bge-m3` 只用于 embedding，`qwen2.5`、DeepSeek API 或其他聊天模型用于生成最终回答。若本地大模型生成较慢，可以把回答生成切换到 DeepSeek：
+
+```env
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-v4-flash
+LLM_API_BASE=https://api.deepseek.com
+LLM_API_KEY=your_deepseek_api_key
+```
 
 ## 当前访问地址
 
